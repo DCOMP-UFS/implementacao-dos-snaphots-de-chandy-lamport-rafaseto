@@ -1,12 +1,12 @@
 /* File:
- *    test.c
+ *    test3.c
  *
  * Purpose:
  *    Integrar o algoritmo de Chandy-Lamport no modelo Produtor/Consumidor com Relógios Vetoriais
  *
  *
- * Compile:  mpicc -g -Wall -o test test.c -lpthread -lrt
- * Usage:    mpiexec -n 3 ./test
+ * Compile:  mpicc -g -Wall -o test3 test3.c -lpthread -lrt
+ * Usage:    mpiexec -n 3 ./test3
  */
 
 #include <stdio.h>
@@ -49,8 +49,14 @@ pthread_cond_t outQueueEmpty;   // Condição de fila de saída vazia
 
 // Função para incrementar o relógio do processo
 void Event(int pid, Clock* clock){
+    printf("SNAPSHOT:\n");
+    
+    printf("* INTERNAL event - process: %d\n", pid);
+    
     clock->p[pid]++;
-    printf("* Internal Event - Process: %d, Clock: (%d, %d, %d)\n", pid, clock->p[0], clock->p[1], clock->p[2]);
+    printf("process %d clock: (%d, %d, %d)\n", pid, clock->p[0], clock->p[1], clock->p[2]);
+    
+    printf("\n");
 }
 
 // Função para enviar mensagem para outro processo
@@ -80,10 +86,15 @@ void Send(int pid_send_to, Clock* clock, int pid_sender) {
     msgOutQueue[0] = temp_clock;    // Insere mensagem na fila
     msgOutCount++;
 
-    printf("* Send Event - Process: %d send to %d, Clock: (%d, %d, %d)\n", pid_sender, pid_send_to, temp_clock.p[0], temp_clock.p[1], temp_clock.p[2]);
+    printf("SNAPSHOT:\n");
+    
+    printf("* SEND event - process: %d send to %d\n", pid_sender, pid_send_to);
+
+    printf("process %d clock: (%d, %d, %d)\n", pid_sender, temp_clock.p[0], temp_clock.p[1], temp_clock.p[2]);
 
     pthread_mutex_unlock(&mutex_msgOutQueue);   // Libera o acesso à fila de saída
     pthread_cond_signal(&outQueueEmpty);    // Sinaliza que a fila de saída não está mais vazia
+    printf("\n");
 }
 
 // Função para processar relógio recebido
@@ -107,26 +118,24 @@ void Receive(int pid_receive_from, int pid_receiver, Clock* clock) {
     Clock temp_clock = msgInQueue[msgInCount - 1];  // Última mensagem da fila
 
     msgInCount--;   // Decrementa o contador de mensagens
-    clock->p[pid_receiver]++;   // Incrementa o relógio do processo receptor
-    printf("* Receiv Event - Process: %d received from %d, Internal Clock = (%d, %d, %d) / External Clock = (%d, %d, %d) => Result = ",
-           pid_receiver, temp_clock.p[3], clock->p[0], clock->p[1], clock->p[2],
-           temp_clock.p[0], temp_clock.p[1], temp_clock.p[2]);
-
+    
+    clock->p[pid_receiver]++;
+    
     processClock(clock, &temp_clock);   // Processa o relógio recebido
-
-    printf("(%d, %d, %d)\n", clock->p[0], clock->p[1], clock->p[2]);
-
+    
+    printf("SNAPSHOT:\n");
+    printf("* RECEIVE event - process: %d received from %d\n", pid_receiver, pid_receive_from);
+    printf("process %d clock: (%d, %d, %d)\n", pid_receiver, clock->p[0], clock->p[1], clock->p[2]);
+           
     pthread_mutex_unlock(&mutex_msgInQueue);    // Libera o acesso à fila de entrada
     pthread_cond_signal(&inQueueFull);  // Sinaliza que a fila de entrada não está mais cheia
-
+    
+    printf("\n");
 }
 
 
 // Função para inicializar a thread de recebimento
 void *initReceiverThread(void *args){
-    struct thread_info *tinfo = args;
-    long tid = tinfo->tid;
-    int pid = (int) tinfo->pid;
     Clock received_clock = {{0, 0, 0, 0, 0}};   // Inicializa o relógio recebido
     while(1){
 
@@ -139,7 +148,6 @@ void *initReceiverThread(void *args){
 
         // Aguarda se a fila de entrada estiver cheia
         while (msgInCount == BUFFER_SIZE) {
-            // printf("Process %d / Recvr Thread: Full Queue\n", pid);
             pthread_cond_wait(&inQueueFull, &mutex_msgInQueue);
         }
 
@@ -151,9 +159,6 @@ void *initReceiverThread(void *args){
         msgInQueue[0] = received_clock; // Insere mensagem na fila
         msgInCount++;
 
-        //printf("Process %d: Clock: (%d, %d, %d) received from %d enqueued in msgInQueue\n",
-        //       pid, received_clock.p[0], received_clock.p[1], received_clock.p[2], received_clock.p[3]);
-
         pthread_mutex_unlock(&mutex_msgInQueue);    // Libera o acesso à fila de entrada
         pthread_cond_signal(&inQueueEmpty); // Sinaliza que a fila de entrada não está mais vazia
     }
@@ -162,15 +167,11 @@ void *initReceiverThread(void *args){
 
 // Função para inicializar a thread de envio
 void *initSendThread(void *args){
-    struct thread_info *tinfo = args;
-    long tid = tinfo->tid;
-    int pid = (int) tinfo->pid;
     while(1){
         pthread_mutex_lock(&mutex_msgOutQueue); // Bloqueia o acesso à fila de saída
 
         // Aguarda se a fila de saída estiver vazia
         while (msgOutCount == 0) {
-            //printf("Process %d / Sender Thread: Empty msgOutQueue\n", pid);
             pthread_cond_wait(&outQueueEmpty, &mutex_msgOutQueue);
         }
 
@@ -182,19 +183,13 @@ void *initSendThread(void *args){
         pthread_cond_signal(&outQueueFull); // Sinaliza que a fila de saída não está mais cheia
 
         MPI_Send(&clock_to_send.p[0], 5, MPI_INT, clock_to_send.p[4], 0, MPI_COMM_WORLD);
-
-        //printf("Process %d: Clock: (%d, %d, %d) sent to %d with MPI_Send\n",
-        //       pid, clock_to_send.p[0], clock_to_send.p[1], clock_to_send.p[2], clock_to_send.p[4]);
-
     }
-
     return NULL;
 }
 
 // Função principal de execução para cada processo
 void *initMainThread(void *args) {
     struct thread_info *tinfo = args;
-    long threadId = tinfo->tid;
     int pid = (int) tinfo->pid;
     Clock *internal_clock = tinfo->clock; // Obter o relógio interno a partir dos argumentos
 
